@@ -1,33 +1,516 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from .database import SessionLocal
-from . import crud, schemas
+from datetime import timedelta
+from typing import List
+import io
+import pandas as pd
+
+from .database import get_db
+from . import crud, schemas, models
+from .auth import (
+    create_access_token,
+    get_current_user,
+    get_current_active_user,
+    require_admin,
+    require_manager_or_admin
+)
+from .config import settings
 
 router = APIRouter()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
-@router.post("/products")
-def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)):
+# ==================== AUTH ROUTES ====================
+@router.post("/auth/register", response_model=schemas.UserOut)
+def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_email(db, email=user.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    return crud.create_user(db=db, user=user)
+
+
+@router.post("/auth/login", response_model=schemas.Token)
+def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
+    db_user = crud.authenticate_user(db, user.email, user.password)
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": db_user.email, "user_id": db_user.id},
+        expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.get("/auth/me", response_model=schemas.UserOut)
+def get_current_user_info(current_user: models.User = Depends(get_current_active_user)):
+    return current_user
+
+
+@router.put("/auth/me", response_model=schemas.UserOut)
+def update_current_user(
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.update_user(db, current_user.id, user_update)
+
+
+# ==================== USER MANAGEMENT (ADMIN) ====================
+@router.get("/users", response_model=List[schemas.UserOut])
+def get_users(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    return crud.get_users(db, skip=skip, limit=limit)
+
+
+@router.get("/users/{user_id}", response_model=schemas.UserOut)
+def get_user(
+    user_id: int,
+    current_user: models.User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = crud.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.put("/users/{user_id}", response_model=schemas.UserOut)
+def update_user(
+    user_id: int,
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    user = crud.update_user(db, user_id, user_update)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+# ==================== CATEGORY ROUTES ====================
+@router.post("/categories", response_model=schemas.CategoryOut)
+def create_category(
+    category: schemas.CategoryCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.create_category(db, category)
+
+
+@router.get("/categories", response_model=List[schemas.CategoryOut])
+def get_categories(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_categories(db)
+
+
+# ==================== PRODUCT ROUTES ====================
+@router.post("/products", response_model=schemas.ProductOut)
+def create_product(
+    product: schemas.ProductCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
     return crud.create_product(db, product)
 
-@router.get("/products")
-def get_products(db: Session = Depends(get_db)):
-    return crud.get_products(db)
 
-@router.post("/purchases")
-def purchase(purchase: schemas.PurchaseCreate, db: Session = Depends(get_db)):
-    return crud.record_purchase(db, purchase)
+@router.get("/products", response_model=List[schemas.ProductOut])
+def get_products(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_products(db, skip=skip, limit=limit)
 
-@router.post("/sales")
-def sale(sale: schemas.SaleCreate, db: Session = Depends(get_db)):
-    return crud.record_sale(db, sale)
 
-@router.get("/finance", response_model=schemas.FinancialSummary)
-def finance(db: Session = Depends(get_db)):
+@router.get("/products/{product_id}", response_model=schemas.ProductOut)
+def get_product(
+    product_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    product = crud.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
+
+@router.put("/products/{product_id}", response_model=schemas.ProductOut)
+def update_product(
+    product_id: int,
+    product_update: schemas.ProductUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    product = crud.update_product(db, product_id, product_update)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
+
+@router.get("/products/alerts/low-stock", response_model=List[schemas.ProductOut])
+def get_low_stock(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_low_stock_products(db)
+
+
+# ==================== SUPPLIER ROUTES ====================
+@router.post("/suppliers", response_model=schemas.SupplierOut)
+def create_supplier(
+    supplier: schemas.SupplierCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.create_supplier(db, supplier)
+
+
+@router.get("/suppliers", response_model=List[schemas.SupplierOut])
+def get_suppliers(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_suppliers(db, skip=skip, limit=limit)
+
+
+@router.get("/suppliers/{supplier_id}", response_model=schemas.SupplierOut)
+def get_supplier(
+    supplier_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    supplier = crud.get_supplier(db, supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
+
+
+@router.put("/suppliers/{supplier_id}", response_model=schemas.SupplierOut)
+def update_supplier(
+    supplier_id: int,
+    supplier_update: schemas.SupplierUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    supplier = crud.update_supplier(db, supplier_id, supplier_update)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
+
+
+# ==================== CUSTOMER ROUTES ====================
+@router.post("/customers", response_model=schemas.CustomerOut)
+def create_customer(
+    customer: schemas.CustomerCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.create_customer(db, customer)
+
+
+@router.get("/customers", response_model=List[schemas.CustomerOut])
+def get_customers(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_customers(db, skip=skip, limit=limit)
+
+
+@router.get("/customers/{customer_id}", response_model=schemas.CustomerOut)
+def get_customer(
+    customer_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    customer = crud.get_customer(db, customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+
+@router.put("/customers/{customer_id}", response_model=schemas.CustomerOut)
+def update_customer(
+    customer_id: int,
+    customer_update: schemas.CustomerUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    customer = crud.update_customer(db, customer_id, customer_update)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+
+# ==================== PURCHASE ROUTES ====================
+@router.post("/purchases", response_model=schemas.PurchaseOut)
+def create_purchase(
+    purchase: schemas.PurchaseCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        return crud.record_purchase(db, purchase, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/purchases", response_model=List[schemas.PurchaseOut])
+def get_purchases(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_purchases(db, skip=skip, limit=limit)
+
+
+@router.get("/purchases/{purchase_id}", response_model=schemas.PurchaseOut)
+def get_purchase(
+    purchase_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    purchase = crud.get_purchase(db, purchase_id)
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    return purchase
+
+
+# ==================== SALE ROUTES ====================
+@router.post("/sales", response_model=schemas.SaleOut)
+def create_sale(
+    sale: schemas.SaleCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        return crud.record_sale(db, sale, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/sales", response_model=List[schemas.SaleOut])
+def get_sales(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_sales(db, skip=skip, limit=limit)
+
+
+@router.get("/sales/{sale_id}", response_model=schemas.SaleOut)
+def get_sale(
+    sale_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    sale = crud.get_sale(db, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    return sale
+
+
+# ==================== PAYMENT ROUTES ====================
+@router.post("/payments", response_model=schemas.PaymentOut)
+def create_payment(
+    payment: schemas.PaymentCreate,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        return crud.record_payment(db, payment)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/payments", response_model=List[schemas.PaymentOut])
+def get_payments(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_payments(db, skip=skip, limit=limit)
+
+
+# ==================== ANALYTICS ROUTES ====================
+@router.get("/analytics/dashboard")
+def get_dashboard(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_dashboard_stats(db)
+
+
+@router.get("/analytics/finance", response_model=schemas.FinancialSummary)
+def get_finance(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
     return crud.financial_summary(db)
+
+
+@router.get("/analytics/debts", response_model=List[schemas.CustomerDebt])
+def get_debts(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_customer_debts(db)
+
+
+@router.get("/analytics/sales-trend", response_model=List[schemas.SalesAnalytics])
+def get_sales_trend(
+    days: int = 30,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_sales_trend(db, days=days)
+
+
+@router.get("/analytics/top-products", response_model=List[schemas.ProductAnalytics])
+def get_top_products(
+    limit: int = 5,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    return crud.get_top_products(db, limit=limit)
+
+
+# ==================== EXPORT ROUTES ====================
+@router.get("/export/debts")
+def export_debts(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    debts = crud.get_customer_debts(db)
+
+    df = pd.DataFrame(debts)
+    if not df.empty:
+        df.columns = ["Customer ID", "Customer Name", "Phone", "Amount Owed", "Unpaid Sales", "Last Sale Date"]
+
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="Customer Debts")
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=customer_debts.xlsx"}
+    )
+
+
+@router.get("/export/sales")
+def export_sales(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    sales = crud.get_sales(db, limit=1000)
+
+    data = []
+    for sale in sales:
+        data.append({
+            "ID": sale.id,
+            "Date": sale.date,
+            "Customer": sale.customer.name if sale.customer else "N/A",
+            "Product": sale.product.name if sale.product else "N/A",
+            "Quantity": sale.qty,
+            "Unit Price": sale.selling_price,
+            "Total": sale.total_amount,
+            "Paid": sale.paid_amount,
+            "Outstanding": sale.total_amount - sale.paid_amount,
+            "Profit": sale.profit,
+            "Status": "Paid" if sale.is_fully_paid else "Pending"
+        })
+
+    df = pd.DataFrame(data)
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="Sales Report")
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=sales_report.xlsx"}
+    )
+
+
+@router.get("/export/purchases")
+def export_purchases(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    purchases = crud.get_purchases(db, limit=1000)
+
+    data = []
+    for purchase in purchases:
+        data.append({
+            "ID": purchase.id,
+            "Date": purchase.date,
+            "Supplier": purchase.supplier.name if purchase.supplier else "N/A",
+            "Product": purchase.product.name if purchase.product else "N/A",
+            "Quantity": purchase.qty,
+            "Unit Price": purchase.purchase_price,
+            "Total": purchase.total_amount
+        })
+
+    df = pd.DataFrame(data)
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="Purchases Report")
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=purchases_report.xlsx"}
+    )
+
+
+@router.get("/export/inventory")
+def export_inventory(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    products = crud.get_products(db, limit=1000)
+
+    data = []
+    for product in products:
+        data.append({
+            "ID": product.id,
+            "SKU": product.sku or "N/A",
+            "Name": product.name,
+            "Category": product.category.name if product.category else "N/A",
+            "Stock Qty": product.stock_qty,
+            "Min Stock Level": product.min_stock_level,
+            "Cost Price": product.cost_price,
+            "Sell Price": product.sell_price,
+            "Stock Value": product.stock_qty * product.cost_price,
+            "Status": "Low Stock" if product.stock_qty <= product.min_stock_level else "OK"
+        })
+
+    df = pd.DataFrame(data)
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="Inventory")
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=inventory.xlsx"}
+    )
