@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
-import { productsAPI, categoriesAPI } from '../services/api'
+import { useEffect, useState, useCallback } from 'react'
+import { productsAPI, categoriesAPI, exportAPI } from '../services/api'
 import toast from 'react-hot-toast'
 import {
   PlusIcon,
   PencilIcon,
   MagnifyingGlassIcon,
   ExclamationTriangleIcon,
+  FunnelIcon,
+  ArrowDownTrayIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 
 const formatCurrency = (value) => {
@@ -15,13 +18,32 @@ const formatCurrency = (value) => {
   }).format(value)
 }
 
+// Debounce hook
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay)
+    return () => clearTimeout(handler)
+  }, [value, delay])
+  return debouncedValue
+}
+
 export default function Products() {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
+  const [exporting, setExporting] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
+
+  // Filter states
   const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [lowStockFilter, setLowStockFilter] = useState(false)
+
+  const debouncedSearch = useDebounce(search, 300)
+
   const [form, setForm] = useState({
     name: '',
     sku: '',
@@ -33,18 +55,31 @@ export default function Products() {
     sell_price: 0,
   })
 
+  // Build filter params
+  const getFilterParams = useCallback(() => {
+    const params = {}
+    if (debouncedSearch) params.search = debouncedSearch
+    if (categoryFilter) params.category_id = categoryFilter
+    if (lowStockFilter) params.low_stock = true
+    return params
+  }, [debouncedSearch, categoryFilter, lowStockFilter])
+
+  // Load categories on mount
   useEffect(() => {
-    loadData()
+    categoriesAPI.getAll().then(res => setCategories(res.data)).catch(() => {})
   }, [])
 
-  const loadData = async () => {
+  // Load products when filters change
+  useEffect(() => {
+    loadProducts()
+  }, [debouncedSearch, categoryFilter, lowStockFilter])
+
+  const loadProducts = async () => {
     try {
-      const [productsRes, categoriesRes] = await Promise.all([
-        productsAPI.getAll(),
-        categoriesAPI.getAll(),
-      ])
+      setLoading(true)
+      const params = getFilterParams()
+      const productsRes = await productsAPI.getAll(params)
       setProducts(productsRes.data)
-      setCategories(categoriesRes.data)
     } catch (error) {
       toast.error('Failed to load products')
     } finally {
@@ -71,7 +106,7 @@ export default function Products() {
         await productsAPI.create(payload)
         toast.success('Product created')
       }
-      loadData()
+      loadProducts()
       closeModal()
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to save product')
@@ -112,13 +147,36 @@ export default function Products() {
     setEditingProduct(null)
   }
 
-  const filteredProducts = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
-  )
+  const handleExport = async () => {
+    try {
+      setExporting(true)
+      const params = getFilterParams()
+      const response = await exportAPI.inventory(params)
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', 'inventory.xlsx')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      toast.success('Export downloaded successfully')
+    } catch (error) {
+      toast.error('Failed to export data')
+    } finally {
+      setExporting(false)
+    }
+  }
 
-  if (loading) {
+  const resetFilters = () => {
+    setSearch('')
+    setCategoryFilter('')
+    setLowStockFilter(false)
+  }
+
+  const hasActiveFilters = search || categoryFilter || lowStockFilter
+
+  if (loading && products.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary-500 border-t-transparent"></div>
@@ -136,25 +194,116 @@ export default function Products() {
             Manage your inventory products
           </p>
         </div>
-        <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
-          <PlusIcon className="h-5 w-5" />
-          Add Product
-        </button>
-      </div>
-
-      {/* Search */}
-      <div className="card p-4">
-        <div className="relative">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search products..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input pl-10"
-          />
+        <div className="flex gap-2">
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <ArrowDownTrayIcon className="h-5 w-5" />
+            {exporting ? 'Exporting...' : 'Export'}
+          </button>
+          <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
+            <PlusIcon className="h-5 w-5" />
+            Add Product
+          </button>
         </div>
       </div>
+
+      {/* Search and Filters */}
+      <div className="card p-4 space-y-4">
+        <div className="flex flex-col sm:flex-row gap-4">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search products by name..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="input pl-10"
+            />
+          </div>
+          {/* Filter Toggle Button */}
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`btn-secondary flex items-center gap-2 ${showFilters ? 'bg-primary-100 dark:bg-primary-900/20' : ''}`}
+          >
+            <FunnelIcon className="h-5 w-5" />
+            Filters
+            {hasActiveFilters && (
+              <span className="ml-1 px-2 py-0.5 text-xs bg-primary-500 text-white rounded-full">
+                {[search, categoryFilter, lowStockFilter].filter(Boolean).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expandable Filters Panel */}
+        {showFilters && (
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-4 animate-fade-in">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Category Filter */}
+              <div>
+                <label className="label">Category</label>
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="input"
+                >
+                  <option value="">All Categories</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Low Stock Toggle */}
+              <div className="flex items-end">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={lowStockFilter}
+                      onChange={(e) => setLowStockFilter(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div className={`w-11 h-6 rounded-full transition-colors ${lowStockFilter ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                      <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${lowStockFilter ? 'translate-x-5' : ''}`}></div>
+                    </div>
+                  </div>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Low Stock Only
+                  </span>
+                </label>
+              </div>
+
+              {/* Reset Filters */}
+              <div className="flex items-end">
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetFilters}
+                    className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                    Reset Filters
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Results Info */}
+      {hasActiveFilters && (
+        <div className="text-sm text-gray-500 dark:text-gray-400">
+          Showing {products.length} {products.length === 1 ? 'result' : 'results'}
+          {loading && <span className="ml-2 animate-pulse">Loading...</span>}
+        </div>
+      )}
 
       {/* Products Table */}
       <div className="card overflow-hidden">
@@ -167,6 +316,9 @@ export default function Products() {
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   SKU
+                </th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  Category
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Stock
@@ -186,7 +338,7 @@ export default function Products() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {filteredProducts.map((product) => (
+              {products.map((product) => (
                 <tr key={product.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -199,16 +351,20 @@ export default function Products() {
                         <p className="font-medium text-gray-900 dark:text-white">
                           {product.name}
                         </p>
-                        {product.category && (
-                          <p className="text-sm text-gray-500 dark:text-gray-400">
-                            {product.category.name}
-                          </p>
-                        )}
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
                     {product.sku || '-'}
+                  </td>
+                  <td className="px-6 py-4">
+                    {product.category ? (
+                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
+                        {product.category.name}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
@@ -250,9 +406,19 @@ export default function Products() {
             </tbody>
           </table>
 
-          {filteredProducts.length === 0 && (
+          {products.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-gray-500 dark:text-gray-400">No products found</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                {hasActiveFilters ? 'No products match your filters' : 'No products found'}
+              </p>
+              {hasActiveFilters && (
+                <button
+                  onClick={resetFilters}
+                  className="mt-2 text-primary-600 hover:text-primary-700 dark:text-primary-400"
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           )}
         </div>

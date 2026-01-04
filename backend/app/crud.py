@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Optional
 from . import models, schemas
 from .auth import get_password_hash, verify_password
@@ -79,10 +79,27 @@ def create_product(db: Session, product: schemas.ProductCreate) -> models.Produc
     return db_product
 
 
-def get_products(db: Session, skip: int = 0, limit: int = 100, active_only: bool = True) -> List[models.Product]:
+def get_products(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    active_only: bool = True,
+    search: Optional[str] = None,
+    sku: Optional[str] = None,
+    category_id: Optional[int] = None,
+    low_stock: bool = False
+) -> List[models.Product]:
     query = db.query(models.Product)
     if active_only:
         query = query.filter(models.Product.is_active == True)
+    if search:
+        query = query.filter(models.Product.name.ilike(f"%{search}%"))
+    if sku:
+        query = query.filter(models.Product.sku.ilike(f"%{sku}%"))
+    if category_id:
+        query = query.filter(models.Product.category_id == category_id)
+    if low_stock:
+        query = query.filter(models.Product.stock_qty <= models.Product.min_stock_level)
     return query.offset(skip).limit(limit).all()
 
 
@@ -189,8 +206,25 @@ def record_purchase(db: Session, purchase: schemas.PurchaseCreate, user_id: int 
     return db_purchase
 
 
-def get_purchases(db: Session, skip: int = 0, limit: int = 100) -> List[models.Purchase]:
-    return db.query(models.Purchase).order_by(desc(models.Purchase.date)).offset(skip).limit(limit).all()
+def get_purchases(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    supplier_id: Optional[int] = None,
+    product_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> List[models.Purchase]:
+    query = db.query(models.Purchase)
+    if supplier_id:
+        query = query.filter(models.Purchase.supplier_id == supplier_id)
+    if product_id:
+        query = query.filter(models.Purchase.product_id == product_id)
+    if start_date:
+        query = query.filter(models.Purchase.date >= start_date)
+    if end_date:
+        query = query.filter(models.Purchase.date <= end_date)
+    return query.order_by(desc(models.Purchase.date)).offset(skip).limit(limit).all()
 
 
 def get_purchase(db: Session, purchase_id: int) -> Optional[models.Purchase]:
@@ -229,8 +263,33 @@ def record_sale(db: Session, sale: schemas.SaleCreate, user_id: int = None) -> m
     return db_sale
 
 
-def get_sales(db: Session, skip: int = 0, limit: int = 100) -> List[models.Sale]:
-    return db.query(models.Sale).order_by(desc(models.Sale.date)).offset(skip).limit(limit).all()
+def get_sales(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    customer_id: Optional[int] = None,
+    payment_status: Optional[str] = None
+) -> List[models.Sale]:
+    query = db.query(models.Sale)
+    if start_date:
+        query = query.filter(models.Sale.date >= start_date)
+    if end_date:
+        query = query.filter(models.Sale.date <= end_date)
+    if customer_id:
+        query = query.filter(models.Sale.customer_id == customer_id)
+    if payment_status:
+        if payment_status == "paid":
+            query = query.filter(models.Sale.is_fully_paid == True)
+        elif payment_status == "unpaid":
+            query = query.filter(models.Sale.paid_amount == 0)
+        elif payment_status == "partial":
+            query = query.filter(
+                models.Sale.paid_amount > 0,
+                models.Sale.is_fully_paid == False
+            )
+    return query.order_by(desc(models.Sale.date)).offset(skip).limit(limit).all()
 
 
 def get_sale(db: Session, sale_id: int) -> Optional[models.Sale]:

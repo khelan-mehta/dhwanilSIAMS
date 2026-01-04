@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react'
-import { purchasesAPI, productsAPI, suppliersAPI } from '../services/api'
+import { useEffect, useState, useCallback } from 'react'
+import { purchasesAPI, productsAPI, suppliersAPI, exportAPI } from '../services/api'
 import toast from 'react-hot-toast'
-import { PlusIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline'
+import {
+  PlusIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  ArrowDownTrayIcon,
+  XMarkIcon,
+  CalendarIcon,
+} from '@heroicons/react/24/outline'
 
 const formatCurrency = (value) => {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)
@@ -13,7 +20,16 @@ export default function Purchases() {
   const [suppliers, setSuppliers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
+
+  // Filter states
   const [search, setSearch] = useState('')
+  const [supplierFilter, setSupplierFilter] = useState('')
+  const [productFilter, setProductFilter] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+
   const [form, setForm] = useState({
     supplier_id: '',
     product_id: '',
@@ -23,22 +39,40 @@ export default function Purchases() {
     notes: '',
   })
 
-  useEffect(() => {
-    loadData()
-  }, [])
+  // Build filter params
+  const getFilterParams = useCallback(() => {
+    const params = {}
+    if (supplierFilter) params.supplier_id = supplierFilter
+    if (productFilter) params.product_id = productFilter
+    if (startDate) params.start_date = startDate
+    if (endDate) params.end_date = endDate
+    return params
+  }, [supplierFilter, productFilter, startDate, endDate])
 
-  const loadData = async () => {
-    try {
-      const [purchasesRes, productsRes, suppliersRes] = await Promise.all([
-        purchasesAPI.getAll(),
-        productsAPI.getAll(),
-        suppliersAPI.getAll(),
-      ])
-      setPurchases(purchasesRes.data)
+  // Load supporting data on mount
+  useEffect(() => {
+    Promise.all([
+      productsAPI.getAll(),
+      suppliersAPI.getAll(),
+    ]).then(([productsRes, suppliersRes]) => {
       setProducts(productsRes.data)
       setSuppliers(suppliersRes.data)
+    }).catch(() => {})
+  }, [])
+
+  // Load purchases when filters change
+  useEffect(() => {
+    loadPurchases()
+  }, [supplierFilter, productFilter, startDate, endDate])
+
+  const loadPurchases = async () => {
+    try {
+      setLoading(true)
+      const params = getFilterParams()
+      const purchasesRes = await purchasesAPI.getAll(params)
+      setPurchases(purchasesRes.data)
     } catch (error) {
-      toast.error('Failed to load data')
+      toast.error('Failed to load purchases')
     } finally {
       setLoading(false)
     }
@@ -64,7 +98,9 @@ export default function Purchases() {
         purchase_price: Number(form.purchase_price),
       })
       toast.success('Purchase recorded - stock updated')
-      loadData()
+      loadPurchases()
+      // Reload products to get updated stock
+      productsAPI.getAll().then(res => setProducts(res.data))
       setShowModal(false)
       setForm({
         supplier_id: '',
@@ -79,14 +115,47 @@ export default function Purchases() {
     }
   }
 
+  const handleExport = async () => {
+    try {
+      setExporting(true)
+      const params = getFilterParams()
+      const response = await exportAPI.purchases(params)
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', 'purchases_report.xlsx')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      toast.success('Export downloaded successfully')
+    } catch (error) {
+      toast.error('Failed to export data')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const resetFilters = () => {
+    setSearch('')
+    setSupplierFilter('')
+    setProductFilter('')
+    setStartDate('')
+    setEndDate('')
+  }
+
+  const hasActiveFilters = supplierFilter || productFilter || startDate || endDate
+
   const totalAmount = Number(form.qty) * Number(form.purchase_price)
 
+  // Client-side search filtering (for supplier/product name search)
   const filteredPurchases = purchases.filter((p) =>
+    !search ||
     p.supplier?.name?.toLowerCase().includes(search.toLowerCase()) ||
     p.product?.name?.toLowerCase().includes(search.toLowerCase())
   )
 
-  if (loading) {
+  if (loading && purchases.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary-500 border-t-transparent"></div>
@@ -96,30 +165,149 @@ export default function Purchases() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Purchases</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Record inventory purchases from suppliers</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2">
-          <PlusIcon className="h-5 w-5" />
-          New Purchase
-        </button>
-      </div>
-
-      <div className="card p-4">
-        <div className="relative">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search purchases..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input pl-10"
-          />
+        <div className="flex gap-2">
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <ArrowDownTrayIcon className="h-5 w-5" />
+            {exporting ? 'Exporting...' : 'Export'}
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2">
+            <PlusIcon className="h-5 w-5" />
+            New Purchase
+          </button>
         </div>
       </div>
 
+      {/* Search and Filters */}
+      <div className="card p-4 space-y-4">
+        <div className="flex flex-col sm:flex-row gap-4">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by supplier or product..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="input pl-10"
+            />
+          </div>
+          {/* Filter Toggle Button */}
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`btn-secondary flex items-center gap-2 ${showFilters ? 'bg-primary-100 dark:bg-primary-900/20' : ''}`}
+          >
+            <FunnelIcon className="h-5 w-5" />
+            Filters
+            {hasActiveFilters && (
+              <span className="ml-1 px-2 py-0.5 text-xs bg-primary-500 text-white rounded-full">
+                {[supplierFilter, productFilter, startDate, endDate].filter(Boolean).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expandable Filters Panel */}
+        {showFilters && (
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-4 animate-fade-in">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              {/* Supplier Filter */}
+              <div>
+                <label className="label">Supplier</label>
+                <select
+                  value={supplierFilter}
+                  onChange={(e) => setSupplierFilter(e.target.value)}
+                  className="input"
+                >
+                  <option value="">All Suppliers</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Product Filter */}
+              <div>
+                <label className="label">Product</label>
+                <select
+                  value={productFilter}
+                  onChange={(e) => setProductFilter(e.target.value)}
+                  className="input"
+                >
+                  <option value="">All Products</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Start Date */}
+              <div>
+                <label className="label">From Date</label>
+                <div className="relative">
+                  <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="input pl-10"
+                  />
+                </div>
+              </div>
+
+              {/* End Date */}
+              <div>
+                <label className="label">To Date</label>
+                <div className="relative">
+                  <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="input pl-10"
+                  />
+                </div>
+              </div>
+
+              {/* Reset Filters */}
+              <div className="flex items-end">
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetFilters}
+                    className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                    Reset Filters
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Results Info */}
+      {(hasActiveFilters || search) && (
+        <div className="text-sm text-gray-500 dark:text-gray-400">
+          Showing {filteredPurchases.length} {filteredPurchases.length === 1 ? 'result' : 'results'}
+          {loading && <span className="ml-2 animate-pulse">Loading...</span>}
+        </div>
+      )}
+
+      {/* Purchases Table */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -156,12 +344,26 @@ export default function Purchases() {
               ))}
             </tbody>
           </table>
+
           {filteredPurchases.length === 0 && (
-            <div className="text-center py-12 text-gray-500">No purchases found</div>
+            <div className="text-center py-12">
+              <p className="text-gray-500 dark:text-gray-400">
+                {hasActiveFilters || search ? 'No purchases match your filters' : 'No purchases found'}
+              </p>
+              {(hasActiveFilters || search) && (
+                <button
+                  onClick={() => { resetFilters(); setSearch(''); }}
+                  className="mt-2 text-primary-600 hover:text-primary-700 dark:text-primary-400"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
 
+      {/* New Purchase Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="card w-full max-w-lg p-6 animate-slide-in">

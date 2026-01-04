@@ -57,7 +57,15 @@ export const categoriesAPI = {
 
 // Products
 export const productsAPI = {
-  getAll: () => api.get('/products'),
+  getAll: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.search) queryParams.append('search', params.search)
+    if (params.sku) queryParams.append('sku', params.sku)
+    if (params.category_id) queryParams.append('category_id', params.category_id)
+    if (params.low_stock) queryParams.append('low_stock', params.low_stock)
+    const query = queryParams.toString()
+    return api.get(`/products${query ? `?${query}` : ''}`)
+  },
   getOne: (id) => api.get(`/products/${id}`),
   create: (data) => api.post('/products', data),
   update: (id, data) => api.put(`/products/${id}`, data),
@@ -82,14 +90,30 @@ export const customersAPI = {
 
 // Purchases
 export const purchasesAPI = {
-  getAll: () => api.get('/purchases'),
+  getAll: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.supplier_id) queryParams.append('supplier_id', params.supplier_id)
+    if (params.product_id) queryParams.append('product_id', params.product_id)
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/purchases${query ? `?${query}` : ''}`)
+  },
   getOne: (id) => api.get(`/purchases/${id}`),
   create: (data) => api.post('/purchases', data),
 }
 
 // Sales
 export const salesAPI = {
-  getAll: () => api.get('/sales'),
+  getAll: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    if (params.customer_id) queryParams.append('customer_id', params.customer_id)
+    if (params.payment_status) queryParams.append('payment_status', params.payment_status)
+    const query = queryParams.toString()
+    return api.get(`/sales${query ? `?${query}` : ''}`)
+  },
   getOne: (id) => api.get(`/sales/${id}`),
   create: (data) => api.post('/sales', data),
 }
@@ -112,9 +136,33 @@ export const analyticsAPI = {
 // Export
 export const exportAPI = {
   debts: () => api.get('/export/debts', { responseType: 'blob' }),
-  sales: () => api.get('/export/sales', { responseType: 'blob' }),
-  purchases: () => api.get('/export/purchases', { responseType: 'blob' }),
-  inventory: () => api.get('/export/inventory', { responseType: 'blob' }),
+  sales: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    if (params.customer_id) queryParams.append('customer_id', params.customer_id)
+    if (params.payment_status) queryParams.append('payment_status', params.payment_status)
+    const query = queryParams.toString()
+    return api.get(`/export/sales${query ? `?${query}` : ''}`, { responseType: 'blob' })
+  },
+  purchases: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.supplier_id) queryParams.append('supplier_id', params.supplier_id)
+    if (params.product_id) queryParams.append('product_id', params.product_id)
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/export/purchases${query ? `?${query}` : ''}`, { responseType: 'blob' })
+  },
+  inventory: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.search) queryParams.append('search', params.search)
+    if (params.sku) queryParams.append('sku', params.sku)
+    if (params.category_id) queryParams.append('category_id', params.category_id)
+    if (params.low_stock) queryParams.append('low_stock', params.low_stock)
+    const query = queryParams.toString()
+    return api.get(`/export/inventory${query ? `?${query}` : ''}`, { responseType: 'blob' })
+  },
 }
 
 export default api

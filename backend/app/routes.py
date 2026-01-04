@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from datetime import timedelta
-from typing import List
+from datetime import timedelta, date
+from typing import List, Optional
 import io
 import pandas as pd
 
@@ -128,10 +128,17 @@ def create_product(
 def get_products(
     skip: int = 0,
     limit: int = 100,
+    search: Optional[str] = Query(None, description="Search by product name"),
+    sku: Optional[str] = Query(None, description="Search by SKU"),
+    category_id: Optional[int] = Query(None, description="Filter by category ID"),
+    low_stock: bool = Query(False, description="Filter low stock products only"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    return crud.get_products(db, skip=skip, limit=limit)
+    return crud.get_products(
+        db, skip=skip, limit=limit,
+        search=search, sku=sku, category_id=category_id, low_stock=low_stock
+    )
 
 
 @router.get("/products/{product_id}", response_model=schemas.ProductOut)
@@ -274,10 +281,18 @@ def create_purchase(
 def get_purchases(
     skip: int = 0,
     limit: int = 100,
+    supplier_id: Optional[int] = Query(None, description="Filter by supplier ID"),
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    return crud.get_purchases(db, skip=skip, limit=limit)
+    return crud.get_purchases(
+        db, skip=skip, limit=limit,
+        supplier_id=supplier_id, product_id=product_id,
+        start_date=start_date, end_date=end_date
+    )
 
 
 @router.get("/purchases/{purchase_id}", response_model=schemas.PurchaseOut)
@@ -309,10 +324,18 @@ def create_sale(
 def get_sales(
     skip: int = 0,
     limit: int = 100,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    customer_id: Optional[int] = Query(None, description="Filter by customer ID"),
+    payment_status: Optional[str] = Query(None, description="Filter by status: paid, unpaid, partial"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    return crud.get_sales(db, skip=skip, limit=limit)
+    return crud.get_sales(
+        db, skip=skip, limit=limit,
+        start_date=start_date, end_date=end_date,
+        customer_id=customer_id, payment_status=payment_status
+    )
 
 
 @router.get("/sales/{sale_id}", response_model=schemas.SaleOut)
@@ -418,10 +441,18 @@ def export_debts(
 
 @router.get("/export/sales")
 def export_sales(
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    customer_id: Optional[int] = Query(None, description="Filter by customer ID"),
+    payment_status: Optional[str] = Query(None, description="Filter by status: paid, unpaid, partial"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    sales = crud.get_sales(db, limit=1000)
+    sales = crud.get_sales(
+        db, limit=10000,
+        start_date=start_date, end_date=end_date,
+        customer_id=customer_id, payment_status=payment_status
+    )
 
     data = []
     for sale in sales:
@@ -453,10 +484,18 @@ def export_sales(
 
 @router.get("/export/purchases")
 def export_purchases(
+    supplier_id: Optional[int] = Query(None, description="Filter by supplier ID"),
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    purchases = crud.get_purchases(db, limit=1000)
+    purchases = crud.get_purchases(
+        db, limit=10000,
+        supplier_id=supplier_id, product_id=product_id,
+        start_date=start_date, end_date=end_date
+    )
 
     data = []
     for purchase in purchases:
@@ -484,10 +523,17 @@ def export_purchases(
 
 @router.get("/export/inventory")
 def export_inventory(
+    search: Optional[str] = Query(None, description="Search by product name"),
+    sku: Optional[str] = Query(None, description="Search by SKU"),
+    category_id: Optional[int] = Query(None, description="Filter by category ID"),
+    low_stock: bool = Query(False, description="Filter low stock products only"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    products = crud.get_products(db, limit=1000)
+    products = crud.get_products(
+        db, limit=10000,
+        search=search, sku=sku, category_id=category_id, low_stock=low_stock
+    )
 
     data = []
     for product in products:
