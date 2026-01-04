@@ -441,3 +441,110 @@ def get_dashboard_stats(db: Session) -> dict:
         "sales_trend": sales_trend,
         "low_stock_products": low_stock
     }
+
+
+# ==================== ROLE-SPECIFIC DASHBOARD STATS ====================
+def get_user_stats(db: Session) -> dict:
+    """Get user statistics by role for admin dashboard"""
+    users = db.query(models.User).all()
+    return {
+        "total_users": len(users),
+        "admin_count": len([u for u in users if u.role == "admin"]),
+        "manager_count": len([u for u in users if u.role == "manager"]),
+        "staff_count": len([u for u in users if u.role == "staff"]),
+        "active_users": len([u for u in users if u.is_active])
+    }
+
+
+def get_inventory_valuation(db: Session) -> dict:
+    """Calculate inventory valuation for manager dashboard"""
+    products = db.query(models.Product).filter(models.Product.is_active == True).all()
+    total_cost_value = sum(p.stock_qty * p.cost_price for p in products)
+    total_sell_value = sum(p.stock_qty * p.sell_price for p in products)
+    return {
+        "total_cost_value": total_cost_value,
+        "total_sell_value": total_sell_value,
+        "potential_profit": total_sell_value - total_cost_value
+    }
+
+
+def get_today_sales_summary(db: Session) -> dict:
+    """Get today's sales summary for staff dashboard"""
+    today = datetime.utcnow().date()
+    today_sales = db.query(models.Sale).filter(models.Sale.date == today).all()
+    return {
+        "sales_count": len(today_sales),
+        "total_amount": sum(s.total_amount for s in today_sales),
+        "total_items": sum(s.qty for s in today_sales)
+    }
+
+
+def get_admin_dashboard(db: Session) -> dict:
+    """Full dashboard for admin users - all data including user stats"""
+    financial = financial_summary(db)
+    recent_sales = get_sales(db, limit=5)
+    recent_purchases = get_purchases(db, limit=5)
+    top_products = get_top_products(db)
+    customer_debts = get_customer_debts(db)
+    sales_trend = get_sales_trend(db)
+    low_stock = get_low_stock_products(db)
+    user_stats = get_user_stats(db)
+
+    return {
+        "role": "admin",
+        "financial": financial,
+        "user_stats": user_stats,
+        "recent_sales": recent_sales,
+        "recent_purchases": recent_purchases,
+        "top_products": top_products,
+        "customer_debts": customer_debts,
+        "sales_trend": sales_trend,
+        "low_stock_products": low_stock
+    }
+
+
+def get_manager_dashboard(db: Session) -> dict:
+    """Dashboard for manager users - sales & inventory focus, no user management"""
+    sales_trend = get_sales_trend(db, days=30)
+    top_products = get_top_products(db, limit=10)
+    low_stock = get_low_stock_products(db)
+    inventory = get_inventory_valuation(db)
+    customer_debts = get_customer_debts(db)
+
+    # Summary stats without full financial exposure
+    sales = db.query(models.Sale).all()
+    total_sales_count = len(sales)
+    outstanding = sum(s.total_amount - s.paid_amount for s in sales if not s.is_fully_paid)
+
+    return {
+        "role": "manager",
+        "summary": {
+            "total_sales": total_sales_count,
+            "outstanding_payments": outstanding,
+            "low_stock_count": len(low_stock)
+        },
+        "inventory": inventory,
+        "sales_trend": sales_trend,
+        "top_products": top_products,
+        "customer_debts": customer_debts,
+        "low_stock_products": low_stock
+    }
+
+
+def get_staff_dashboard(db: Session) -> dict:
+    """Minimal dashboard for staff users - only low stock and today's activity"""
+    low_stock = get_low_stock_products(db)
+    today_summary = get_today_sales_summary(db)
+
+    # Get recent activity (last 5 sales made today)
+    today = datetime.utcnow().date()
+    recent_sales = db.query(models.Sale).filter(
+        models.Sale.date == today
+    ).order_by(desc(models.Sale.created_at)).limit(5).all()
+
+    return {
+        "role": "staff",
+        "today_summary": today_summary,
+        "low_stock_products": low_stock,
+        "recent_activity": recent_sales
+    }

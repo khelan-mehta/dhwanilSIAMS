@@ -379,7 +379,13 @@ def get_dashboard(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    return crud.get_dashboard_stats(db)
+    """Return role-specific dashboard data"""
+    if current_user.role == "admin":
+        return crud.get_admin_dashboard(db)
+    elif current_user.role == "manager":
+        return crud.get_manager_dashboard(db)
+    else:  # staff
+        return crud.get_staff_dashboard(db)
 
 
 @router.get("/analytics/finance", response_model=schemas.FinancialSummary)

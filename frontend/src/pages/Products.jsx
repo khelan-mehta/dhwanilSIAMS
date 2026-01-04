@@ -9,6 +9,7 @@ import {
   FunnelIcon,
   ArrowDownTrayIcon,
   XMarkIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline'
 
 const formatCurrency = (value) => {
@@ -33,6 +34,7 @@ export default function Products() {
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   const [exporting, setExporting] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
@@ -53,6 +55,11 @@ export default function Products() {
     min_stock_level: 10,
     cost_price: 0,
     sell_price: 0,
+  })
+
+  const [categoryForm, setCategoryForm] = useState({
+    name: '',
+    description: '',
   })
 
   // Build filter params
@@ -174,6 +181,21 @@ export default function Products() {
     setLowStockFilter(false)
   }
 
+  const handleCreateCategory = async (e) => {
+    e.preventDefault()
+    try {
+      const response = await categoriesAPI.create(categoryForm)
+      setCategories([...categories, response.data])
+      toast.success('Category created successfully')
+      setShowCategoryModal(false)
+      setCategoryForm({ name: '', description: '' })
+      // Auto-select the newly created category
+      setForm({ ...form, category_id: response.data.id })
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to create category')
+    }
+  }
+
   const hasActiveFilters = search || categoryFilter || lowStockFilter
 
   if (loading && products.length === 0) {
@@ -202,6 +224,10 @@ export default function Products() {
           >
             <ArrowDownTrayIcon className="h-5 w-5" />
             {exporting ? 'Exporting...' : 'Export'}
+          </button>
+          <button onClick={() => setShowCategoryModal(true)} className="btn-secondary flex items-center gap-2">
+            <TagIcon className="h-5 w-5" />
+            Add Category
           </button>
           <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
             <PlusIcon className="h-5 w-5" />
@@ -534,6 +560,58 @@ export default function Products() {
                 </button>
                 <button type="submit" className="btn-primary">
                   {editingProduct ? 'Update' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Category Modal */}
+      {showCategoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="card w-full max-w-md p-6 animate-slide-in">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6">
+              Add New Category
+            </h2>
+
+            <form onSubmit={handleCreateCategory} className="space-y-4">
+              <div>
+                <label className="label">Category Name</label>
+                <input
+                  type="text"
+                  value={categoryForm.name}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                  className="input"
+                  placeholder="e.g., Electronics, Clothing, Food..."
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">Description (Optional)</label>
+                <textarea
+                  value={categoryForm.description}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })}
+                  className="input"
+                  rows="2"
+                  placeholder="Brief description of this category..."
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCategoryModal(false)
+                    setCategoryForm({ name: '', description: '' })
+                  }}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary">
+                  Create Category
                 </button>
               </div>
             </form>
