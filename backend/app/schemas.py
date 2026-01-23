@@ -360,3 +360,153 @@ class ReturnSummary(BaseModel):
     total_purchase_returns: int
     total_sales_refund_amount: float
     total_purchase_refund_amount: float
+
+
+# ==================== ACCOUNT SCHEMAS ====================
+class AccountCreate(BaseModel):
+    name: str
+    account_type: str  # customer, supplier, cash, bank, income, expense
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+
+
+class AccountUpdate(BaseModel):
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AccountOut(BaseModel):
+    id: int
+    name: str
+    account_type: str
+    reference_type: Optional[str]
+    reference_id: Optional[int]
+    balance: float
+    is_system: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AccountBalance(BaseModel):
+    account_id: int
+    account_name: str
+    account_type: str
+    balance: float
+    reference_type: Optional[str]
+    reference_id: Optional[int]
+
+
+# ==================== LEDGER SCHEMAS ====================
+class LedgerEntryCreate(BaseModel):
+    account_id: int
+    transaction_type: str
+    transaction_id: Optional[int] = None
+    debit_amount: float = 0.0
+    credit_amount: float = 0.0
+    narration: Optional[str] = None
+    entry_date: date
+
+
+class LedgerEntryOut(BaseModel):
+    id: int
+    account_id: int
+    transaction_type: str
+    transaction_id: Optional[int]
+    debit_amount: float
+    credit_amount: float
+    balance_after: float
+    narration: Optional[str]
+    entry_date: date
+    created_by: Optional[int]
+    created_at: datetime
+    account: Optional[AccountOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AccountTransfer(BaseModel):
+    from_account_id: int
+    to_account_id: int
+    amount: float
+    narration: Optional[str] = None
+    transfer_date: date
+
+
+class CustomerStatement(BaseModel):
+    customer_id: int
+    customer_name: str
+    opening_balance: float
+    total_sales: float
+    total_payments: float
+    total_returns: float
+    closing_balance: float
+    entries: List[LedgerEntryOut]
+
+
+class SupplierStatement(BaseModel):
+    supplier_id: int
+    supplier_name: str
+    opening_balance: float
+    total_purchases: float
+    total_payments: float
+    total_returns: float
+    closing_balance: float
+    entries: List[LedgerEntryOut]
+
+
+class AccountsSummary(BaseModel):
+    total_receivables: float
+    total_payables: float
+    cash_balance: float
+    bank_balance: float
+    total_income: float
+    total_expenses: float
+
+
+# ==================== ENHANCED RETURN SCHEMAS ====================
+class SalesReturnDetailedOut(BaseModel):
+    id: int
+    sale_id: int
+    product_id: int
+    customer_id: Optional[int]
+    user_id: Optional[int]
+    return_qty: int
+    unit_price_at_sale: float
+    refund_amount: float
+    refund_method: str
+    profit_adjustment: float
+    reason: Optional[str]
+    return_date: date
+    created_at: datetime
+    sale: Optional[SaleOut] = None
+    product: Optional[ProductOut] = None
+    customer: Optional[CustomerOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PurchaseReturnDetailedOut(BaseModel):
+    id: int
+    purchase_id: int
+    product_id: int
+    supplier_id: Optional[int]
+    user_id: Optional[int]
+    return_qty: int
+    unit_price_at_purchase: float
+    refund_amount: float
+    refund_method: str
+    reason: Optional[str]
+    return_date: date
+    created_at: datetime
+    purchase: Optional[PurchaseOut] = None
+    product: Optional[ProductOut] = None
+    supplier: Optional[SupplierOut] = None
+
+    class Config:
+        from_attributes = True

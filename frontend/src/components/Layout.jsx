@@ -16,6 +16,8 @@ import {
   XMarkIcon,
   UserCircleIcon,
   ArrowUturnLeftIcon,
+  BanknotesIcon,
+  BookOpenIcon,
 } from '@heroicons/react/24/outline'
 
 const navigation = [
@@ -24,6 +26,8 @@ const navigation = [
   { name: 'Purchases', href: '/purchases', icon: ShoppingCartIcon },
   { name: 'Sales', href: '/sales', icon: CurrencyDollarIcon },
   { name: 'Returns', href: '/returns', icon: ArrowUturnLeftIcon },
+  { name: 'Accounts', href: '/accounts', icon: BanknotesIcon },
+  { name: 'Ledger', href: '/ledger', icon: BookOpenIcon },
   { name: 'Customers', href: '/customers', icon: UsersIcon },
   { name: 'Suppliers', href: '/suppliers', icon: TruckIcon },
   { name: 'Debts', href: '/debts', icon: CreditCardIcon },

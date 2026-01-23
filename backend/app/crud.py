@@ -201,6 +201,19 @@ def record_purchase(db: Session, purchase: schemas.PurchaseCreate, user_id: int 
         date=purchase.date
     )
     db.add(db_purchase)
+    db.flush()  # Get the ID before creating ledger entries
+
+    # Create ledger entries: Debit Expense, Credit Supplier
+    expense_account = get_or_create_system_account(db, "expense")
+    supplier_account = get_or_create_supplier_account(db, purchase.supplier_id)
+
+    create_double_entry(
+        db, expense_account.id, supplier_account.id, total_amount,
+        "purchase", db_purchase.id,
+        f"Purchase of {purchase.qty} x {product.name}",
+        purchase.date, user_id
+    )
+
     db.commit()
     db.refresh(db_purchase)
     return db_purchase
@@ -258,6 +271,29 @@ def record_sale(db: Session, sale: schemas.SaleCreate, user_id: int = None) -> m
         date=sale.date
     )
     db.add(db_sale)
+    db.flush()
+
+    # Create ledger entries: Debit Customer, Credit Income
+    customer_account = get_or_create_customer_account(db, sale.customer_id)
+    income_account = get_or_create_system_account(db, "income")
+
+    create_double_entry(
+        db, customer_account.id, income_account.id, total_amount,
+        "sale", db_sale.id,
+        f"Sale of {sale.qty} x {product.name}",
+        sale.date, user_id
+    )
+
+    # If payment received, create payment entries: Debit Cash, Credit Customer
+    if sale.paid_amount > 0:
+        cash_account = get_or_create_system_account(db, "cash")
+        create_double_entry(
+            db, cash_account.id, customer_account.id, sale.paid_amount,
+            "payment", db_sale.id,
+            f"Payment received for sale #{db_sale.id}",
+            sale.date, user_id
+        )
+
     db.commit()
     db.refresh(db_sale)
     return db_sale
@@ -307,7 +343,7 @@ def update_sale_payment(db: Session, sale_id: int, additional_payment: float) ->
 
 
 # ==================== PAYMENT OPERATIONS ====================
-def record_payment(db: Session, payment: schemas.PaymentCreate) -> models.Payment:
+def record_payment(db: Session, payment: schemas.PaymentCreate, user_id: int = None) -> models.Payment:
     sale = get_sale(db, payment.sale_id)
     if not sale:
         raise ValueError("Sale not found")
@@ -317,6 +353,21 @@ def record_payment(db: Session, payment: schemas.PaymentCreate) -> models.Paymen
 
     db_payment = models.Payment(**payment.model_dump())
     db.add(db_payment)
+    db.flush()
+
+    # Create ledger entries: Debit Cash/Bank, Credit Customer
+    customer_account = get_or_create_customer_account(db, payment.customer_id)
+    payment_account = get_or_create_system_account(
+        db, "bank" if payment.payment_method == "bank" else "cash"
+    )
+
+    create_double_entry(
+        db, payment_account.id, customer_account.id, payment.amount,
+        "payment", db_payment.id,
+        f"Payment for sale #{payment.sale_id}",
+        payment.date, user_id
+    )
+
     db.commit()
     db.refresh(db_payment)
     return db_payment
@@ -570,12 +621,13 @@ def process_sales_return(
     user_id: int = None
 ) -> models.SalesReturn:
     """
-    Process a sales return with stock rollback and financial adjustments.
+    Process a sales return with stock rollback, financial adjustments, and ledger entries.
     - Increases product stock
     - Calculates refund based on selling price
     - Adjusts profit (reduces by cost_price * return_qty)
     - For cash refund: reduces paid_amount
     - For credit: reduces outstanding (total_amount)
+    - Creates accounting entries
     """
     sale = get_sale(db, sale_id)
     if not sale:
@@ -601,10 +653,8 @@ def process_sales_return(
 
     # Adjust sale financials based on refund method
     if return_data.refund_method == "cash":
-        # Cash refund: reduce paid amount
         sale.paid_amount = max(0, sale.paid_amount - refund_amount)
     else:
-        # Credit: reduce total amount (customer credit)
         sale.total_amount -= refund_amount
 
     # Update fully paid status
@@ -613,12 +663,14 @@ def process_sales_return(
     # Reduce profit
     sale.profit += profit_adjustment
 
-    # Create return record
+    # Create return record with enhanced fields
     db_return = models.SalesReturn(
         sale_id=sale_id,
         product_id=sale.product_id,
+        customer_id=sale.customer_id,
         user_id=user_id,
         return_qty=return_data.return_qty,
+        unit_price_at_sale=sale.selling_price,
         refund_amount=refund_amount,
         refund_method=return_data.refund_method,
         profit_adjustment=profit_adjustment,
@@ -626,6 +678,30 @@ def process_sales_return(
         return_date=return_data.return_date
     )
     db.add(db_return)
+    db.flush()
+
+    # Create ledger entries for sales return
+    customer_account = get_or_create_customer_account(db, sale.customer_id)
+    sales_return_account = get_or_create_system_account(db, "sales_return")
+
+    # Debit Sales Return account, Credit Customer account
+    create_double_entry(
+        db, sales_return_account.id, customer_account.id, refund_amount,
+        "sales_return", db_return.id,
+        f"Sales return: {return_data.return_qty} x {product.name}",
+        return_data.return_date, user_id
+    )
+
+    # If cash refund, also: Debit Customer, Credit Cash
+    if return_data.refund_method == "cash":
+        cash_account = get_or_create_system_account(db, "cash")
+        create_double_entry(
+            db, customer_account.id, cash_account.id, refund_amount,
+            "sales_return", db_return.id,
+            f"Cash refund for return #{db_return.id}",
+            return_data.return_date, user_id
+        )
+
     db.commit()
     db.refresh(db_return)
     return db_return
@@ -638,10 +714,10 @@ def process_purchase_return(
     user_id: int = None
 ) -> models.PurchaseReturn:
     """
-    Process a purchase return to supplier with stock reduction.
+    Process a purchase return to supplier with stock reduction and ledger entries.
     - Decreases product stock
     - Calculates refund based on purchase price
-    - Tracks refund amount for expense adjustment
+    - Creates accounting entries
     """
     purchase = get_purchase(db, purchase_id)
     if not purchase:
@@ -671,18 +747,44 @@ def process_purchase_return(
     # Adjust purchase total
     purchase.total_amount -= refund_amount
 
-    # Create return record
+    # Create return record with enhanced fields
     db_return = models.PurchaseReturn(
         purchase_id=purchase_id,
         product_id=purchase.product_id,
+        supplier_id=purchase.supplier_id,
         user_id=user_id,
         return_qty=return_data.return_qty,
+        unit_price_at_purchase=purchase.purchase_price,
         refund_amount=refund_amount,
         refund_method=return_data.refund_method,
         reason=return_data.reason,
         return_date=return_data.return_date
     )
     db.add(db_return)
+    db.flush()
+
+    # Create ledger entries for purchase return
+    supplier_account = get_or_create_supplier_account(db, purchase.supplier_id)
+    purchase_return_account = get_or_create_system_account(db, "purchase_return")
+
+    # Debit Supplier account, Credit Purchase Return account
+    create_double_entry(
+        db, supplier_account.id, purchase_return_account.id, refund_amount,
+        "purchase_return", db_return.id,
+        f"Purchase return: {return_data.return_qty} x {product.name}",
+        return_data.return_date, user_id
+    )
+
+    # If cash refund expected, also: Debit Cash, Credit Supplier
+    if return_data.refund_method == "cash":
+        cash_account = get_or_create_system_account(db, "cash")
+        create_double_entry(
+            db, cash_account.id, supplier_account.id, refund_amount,
+            "purchase_return", db_return.id,
+            f"Cash refund expected for return #{db_return.id}",
+            return_data.return_date, user_id
+        )
+
     db.commit()
     db.refresh(db_return)
     return db_return
@@ -744,4 +846,393 @@ def get_return_summary(db: Session) -> dict:
         "total_purchase_returns": len(purchase_returns),
         "total_sales_refund_amount": sum(r.refund_amount for r in sales_returns),
         "total_purchase_refund_amount": sum(r.refund_amount for r in purchase_returns)
+    }
+
+
+# ==================== ACCOUNTING SYSTEM ====================
+SYSTEM_ACCOUNTS = {
+    "cash": {"name": "Cash Account", "type": "cash"},
+    "bank": {"name": "Bank Account", "type": "bank"},
+    "income": {"name": "Sales Income", "type": "income"},
+    "expense": {"name": "Purchase Expenses", "type": "expense"},
+    "sales_return": {"name": "Sales Returns", "type": "sales_return"},
+    "purchase_return": {"name": "Purchase Returns", "type": "purchase_return"},
+}
+
+
+def initialize_system_accounts(db: Session) -> None:
+    """Initialize system accounts if they don't exist"""
+    for key, data in SYSTEM_ACCOUNTS.items():
+        existing = db.query(models.Account).filter(
+            models.Account.account_type == data["type"],
+            models.Account.is_system == True
+        ).first()
+        if not existing:
+            account = models.Account(
+                name=data["name"],
+                account_type=data["type"],
+                is_system=True,
+                balance=0.0
+            )
+            db.add(account)
+    db.commit()
+
+
+def get_or_create_system_account(db: Session, account_type: str) -> models.Account:
+    """Get a system account, creating it if necessary"""
+    account = db.query(models.Account).filter(
+        models.Account.account_type == account_type,
+        models.Account.is_system == True
+    ).first()
+    if not account:
+        data = SYSTEM_ACCOUNTS.get(account_type, {"name": account_type.title(), "type": account_type})
+        account = models.Account(
+            name=data["name"],
+            account_type=data["type"],
+            is_system=True,
+            balance=0.0
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+    return account
+
+
+def get_or_create_customer_account(db: Session, customer_id: int) -> models.Account:
+    """Get or create an account for a customer"""
+    account = db.query(models.Account).filter(
+        models.Account.account_type == "customer",
+        models.Account.reference_id == customer_id
+    ).first()
+    if not account:
+        customer = get_customer(db, customer_id)
+        if not customer:
+            raise ValueError("Customer not found")
+        account = models.Account(
+            name=f"Customer: {customer.name}",
+            account_type="customer",
+            reference_type="customer",
+            reference_id=customer_id,
+            balance=0.0
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+    return account
+
+
+def get_or_create_supplier_account(db: Session, supplier_id: int) -> models.Account:
+    """Get or create an account for a supplier"""
+    account = db.query(models.Account).filter(
+        models.Account.account_type == "supplier",
+        models.Account.reference_id == supplier_id
+    ).first()
+    if not account:
+        supplier = get_supplier(db, supplier_id)
+        if not supplier:
+            raise ValueError("Supplier not found")
+        account = models.Account(
+            name=f"Supplier: {supplier.name}",
+            account_type="supplier",
+            reference_type="supplier",
+            reference_id=supplier_id,
+            balance=0.0
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+    return account
+
+
+# ==================== LEDGER OPERATIONS ====================
+def create_ledger_entry(
+    db: Session,
+    account_id: int,
+    transaction_type: str,
+    transaction_id: int,
+    debit_amount: float,
+    credit_amount: float,
+    narration: str,
+    entry_date: date,
+    user_id: int = None
+) -> models.LedgerEntry:
+    """Create a ledger entry and update account balance"""
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise ValueError("Account not found")
+
+    # Calculate new balance
+    new_balance = account.balance + debit_amount - credit_amount
+    account.balance = new_balance
+
+    entry = models.LedgerEntry(
+        account_id=account_id,
+        transaction_type=transaction_type,
+        transaction_id=transaction_id,
+        debit_amount=debit_amount,
+        credit_amount=credit_amount,
+        balance_after=new_balance,
+        narration=narration,
+        entry_date=entry_date,
+        created_by=user_id
+    )
+    db.add(entry)
+    return entry
+
+
+def create_double_entry(
+    db: Session,
+    debit_account_id: int,
+    credit_account_id: int,
+    amount: float,
+    transaction_type: str,
+    transaction_id: int,
+    narration: str,
+    entry_date: date,
+    user_id: int = None
+) -> tuple:
+    """Create double-entry bookkeeping entries"""
+    debit_entry = create_ledger_entry(
+        db, debit_account_id, transaction_type, transaction_id,
+        debit_amount=amount, credit_amount=0,
+        narration=f"DR: {narration}", entry_date=entry_date, user_id=user_id
+    )
+    credit_entry = create_ledger_entry(
+        db, credit_account_id, transaction_type, transaction_id,
+        debit_amount=0, credit_amount=amount,
+        narration=f"CR: {narration}", entry_date=entry_date, user_id=user_id
+    )
+    return debit_entry, credit_entry
+
+
+def get_ledger_entries(
+    db: Session,
+    account_id: Optional[int] = None,
+    transaction_type: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[models.LedgerEntry]:
+    """Get ledger entries with optional filters"""
+    query = db.query(models.LedgerEntry)
+    if account_id:
+        query = query.filter(models.LedgerEntry.account_id == account_id)
+    if transaction_type:
+        query = query.filter(models.LedgerEntry.transaction_type == transaction_type)
+    if start_date:
+        query = query.filter(models.LedgerEntry.entry_date >= start_date)
+    if end_date:
+        query = query.filter(models.LedgerEntry.entry_date <= end_date)
+    return query.order_by(desc(models.LedgerEntry.created_at)).offset(skip).limit(limit).all()
+
+
+def get_account_statement(
+    db: Session,
+    account_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> dict:
+    """Get account statement with entries and running balance"""
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise ValueError("Account not found")
+
+    query = db.query(models.LedgerEntry).filter(models.LedgerEntry.account_id == account_id)
+    if start_date:
+        query = query.filter(models.LedgerEntry.entry_date >= start_date)
+    if end_date:
+        query = query.filter(models.LedgerEntry.entry_date <= end_date)
+    entries = query.order_by(models.LedgerEntry.entry_date, models.LedgerEntry.id).all()
+
+    total_debits = sum(e.debit_amount for e in entries)
+    total_credits = sum(e.credit_amount for e in entries)
+
+    return {
+        "account": account,
+        "entries": entries,
+        "total_debits": total_debits,
+        "total_credits": total_credits,
+        "closing_balance": account.balance
+    }
+
+
+# ==================== ACCOUNT CRUD OPERATIONS ====================
+def get_accounts(
+    db: Session,
+    account_type: Optional[str] = None,
+    is_system: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[models.Account]:
+    """Get all accounts with optional filters"""
+    query = db.query(models.Account).filter(models.Account.is_active == True)
+    if account_type:
+        query = query.filter(models.Account.account_type == account_type)
+    if is_system is not None:
+        query = query.filter(models.Account.is_system == is_system)
+    return query.offset(skip).limit(limit).all()
+
+
+def get_account(db: Session, account_id: int) -> Optional[models.Account]:
+    return db.query(models.Account).filter(models.Account.id == account_id).first()
+
+
+def get_account_by_reference(db: Session, reference_type: str, reference_id: int) -> Optional[models.Account]:
+    return db.query(models.Account).filter(
+        models.Account.reference_type == reference_type,
+        models.Account.reference_id == reference_id
+    ).first()
+
+
+def create_account(db: Session, account: schemas.AccountCreate) -> models.Account:
+    db_account = models.Account(**account.model_dump())
+    db.add(db_account)
+    db.commit()
+    db.refresh(db_account)
+    return db_account
+
+
+def update_account(db: Session, account_id: int, account_update: schemas.AccountUpdate) -> Optional[models.Account]:
+    db_account = get_account(db, account_id)
+    if db_account:
+        update_data = account_update.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(db_account, key, value)
+        db.commit()
+        db.refresh(db_account)
+    return db_account
+
+
+def process_account_transfer(
+    db: Session,
+    from_account_id: int,
+    to_account_id: int,
+    amount: float,
+    narration: str,
+    transfer_date: date,
+    user_id: int = None
+) -> tuple:
+    """Process manual transfer between accounts"""
+    create_double_entry(
+        db, to_account_id, from_account_id, amount,
+        "adjustment", None, narration or "Manual Transfer",
+        transfer_date, user_id
+    )
+    db.commit()
+    return get_account(db, from_account_id), get_account(db, to_account_id)
+
+
+def get_accounts_summary(db: Session) -> dict:
+    """Get summary of all account balances"""
+    accounts = db.query(models.Account).filter(models.Account.is_active == True).all()
+
+    customer_accounts = [a for a in accounts if a.account_type == "customer"]
+    supplier_accounts = [a for a in accounts if a.account_type == "supplier"]
+    cash_account = next((a for a in accounts if a.account_type == "cash" and a.is_system), None)
+    bank_account = next((a for a in accounts if a.account_type == "bank" and a.is_system), None)
+    income_account = next((a for a in accounts if a.account_type == "income" and a.is_system), None)
+    expense_account = next((a for a in accounts if a.account_type == "expense" and a.is_system), None)
+
+    return {
+        "total_receivables": sum(a.balance for a in customer_accounts if a.balance > 0),
+        "total_payables": abs(sum(a.balance for a in supplier_accounts if a.balance < 0)),
+        "cash_balance": cash_account.balance if cash_account else 0,
+        "bank_balance": bank_account.balance if bank_account else 0,
+        "total_income": income_account.balance if income_account else 0,
+        "total_expenses": expense_account.balance if expense_account else 0
+    }
+
+
+def get_customer_statement(
+    db: Session,
+    customer_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> dict:
+    """Get customer account statement"""
+    customer = get_customer(db, customer_id)
+    if not customer:
+        raise ValueError("Customer not found")
+
+    account = get_account_by_reference(db, "customer", customer_id)
+    if not account:
+        return {
+            "customer_id": customer_id,
+            "customer_name": customer.name,
+            "opening_balance": 0,
+            "total_sales": 0,
+            "total_payments": 0,
+            "total_returns": 0,
+            "closing_balance": 0,
+            "entries": []
+        }
+
+    query = db.query(models.LedgerEntry).filter(models.LedgerEntry.account_id == account.id)
+    if start_date:
+        query = query.filter(models.LedgerEntry.entry_date >= start_date)
+    if end_date:
+        query = query.filter(models.LedgerEntry.entry_date <= end_date)
+    entries = query.order_by(models.LedgerEntry.entry_date, models.LedgerEntry.id).all()
+
+    total_sales = sum(e.debit_amount for e in entries if e.transaction_type == "sale")
+    total_payments = sum(e.credit_amount for e in entries if e.transaction_type == "payment")
+    total_returns = sum(e.credit_amount for e in entries if e.transaction_type == "sales_return")
+
+    return {
+        "customer_id": customer_id,
+        "customer_name": customer.name,
+        "opening_balance": 0,  # Would need historical calculation for accurate opening
+        "total_sales": total_sales,
+        "total_payments": total_payments,
+        "total_returns": total_returns,
+        "closing_balance": account.balance,
+        "entries": entries
+    }
+
+
+def get_supplier_statement(
+    db: Session,
+    supplier_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> dict:
+    """Get supplier account statement"""
+    supplier = get_supplier(db, supplier_id)
+    if not supplier:
+        raise ValueError("Supplier not found")
+
+    account = get_account_by_reference(db, "supplier", supplier_id)
+    if not account:
+        return {
+            "supplier_id": supplier_id,
+            "supplier_name": supplier.name,
+            "opening_balance": 0,
+            "total_purchases": 0,
+            "total_payments": 0,
+            "total_returns": 0,
+            "closing_balance": 0,
+            "entries": []
+        }
+
+    query = db.query(models.LedgerEntry).filter(models.LedgerEntry.account_id == account.id)
+    if start_date:
+        query = query.filter(models.LedgerEntry.entry_date >= start_date)
+    if end_date:
+        query = query.filter(models.LedgerEntry.entry_date <= end_date)
+    entries = query.order_by(models.LedgerEntry.entry_date, models.LedgerEntry.id).all()
+
+    total_purchases = sum(e.credit_amount for e in entries if e.transaction_type == "purchase")
+    total_payments = sum(e.debit_amount for e in entries if e.transaction_type == "payment")
+    total_returns = sum(e.debit_amount for e in entries if e.transaction_type == "purchase_return")
+
+    return {
+        "supplier_id": supplier_id,
+        "supplier_name": supplier.name,
+        "opening_balance": 0,
+        "total_purchases": total_purchases,
+        "total_payments": total_payments,
+        "total_returns": total_returns,
+        "closing_balance": account.balance,
+        "entries": entries
     }

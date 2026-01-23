@@ -163,6 +163,57 @@ export const returnsAPI = {
   getSummary: () => api.get('/returns/summary'),
 }
 
+// Accounts & Ledger
+export const accountsAPI = {
+  getAll: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.account_type) queryParams.append('account_type', params.account_type)
+    if (params.is_system !== undefined) queryParams.append('is_system', params.is_system)
+    const query = queryParams.toString()
+    return api.get(`/accounts${query ? `?${query}` : ''}`)
+  },
+  getOne: (id) => api.get(`/accounts/${id}`),
+  getSummary: () => api.get('/accounts/summary'),
+  initialize: () => api.get('/accounts/initialize'),
+  getLedger: (accountId, params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/accounts/${accountId}/ledger${query ? `?${query}` : ''}`)
+  },
+  transfer: (data) => api.post('/accounts/transfer', data),
+}
+
+export const ledgerAPI = {
+  getAll: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.account_id) queryParams.append('account_id', params.account_id)
+    if (params.transaction_type) queryParams.append('transaction_type', params.transaction_type)
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/ledger${query ? `?${query}` : ''}`)
+  },
+}
+
+export const statementsAPI = {
+  getCustomerStatement: (customerId, params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/statements/customer/${customerId}${query ? `?${query}` : ''}`)
+  },
+  getSupplierStatement: (supplierId, params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/statements/supplier/${supplierId}${query ? `?${query}` : ''}`)
+  },
+}
+
 // Export
 export const exportAPI = {
   debts: () => api.get('/export/debts', { responseType: 'blob' }),
@@ -192,6 +243,14 @@ export const exportAPI = {
     if (params.low_stock) queryParams.append('low_stock', params.low_stock)
     const query = queryParams.toString()
     return api.get(`/export/inventory${query ? `?${query}` : ''}`, { responseType: 'blob' })
+  },
+  returns: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.return_type) queryParams.append('return_type', params.return_type)
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/export/returns${query ? `?${query}` : ''}`, { responseType: 'blob' })
   },
 }
 

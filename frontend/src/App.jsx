@@ -11,6 +11,8 @@ import Customers from './pages/Customers'
 import Suppliers from './pages/Suppliers'
 import Debts from './pages/Debts'
 import Returns from './pages/Returns'
+import Accounts from './pages/Accounts'
+import Ledger from './pages/Ledger'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Reports from './pages/Reports'
@@ -58,6 +60,8 @@ export default function App() {
         <Route path="suppliers" element={<Suppliers />} />
         <Route path="debts" element={<Debts />} />
         <Route path="returns" element={<Returns />} />
+        <Route path="accounts" element={<Accounts />} />
+        <Route path="ledger" element={<Ledger />} />
         <Route path="users" element={<Users />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />

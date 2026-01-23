@@ -166,23 +166,46 @@ class RefundMethod(str, enum.Enum):
     CREDIT = "credit"
 
 
+class AccountType(str, enum.Enum):
+    CUSTOMER = "customer"
+    SUPPLIER = "supplier"
+    CASH = "cash"
+    BANK = "bank"
+    INCOME = "income"
+    EXPENSE = "expense"
+    SALES_RETURN = "sales_return"
+    PURCHASE_RETURN = "purchase_return"
+
+
+class TransactionType(str, enum.Enum):
+    SALE = "sale"
+    PURCHASE = "purchase"
+    PAYMENT = "payment"
+    SALES_RETURN = "sales_return"
+    PURCHASE_RETURN = "purchase_return"
+    ADJUSTMENT = "adjustment"
+
+
 class SalesReturn(Base):
     __tablename__ = "sales_returns"
 
     id = Column(Integer, primary_key=True, index=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     return_qty = Column(Integer, nullable=False)
+    unit_price_at_sale = Column(Float, nullable=False)
     refund_amount = Column(Float, nullable=False)
     refund_method = Column(String(50), default=RefundMethod.CASH)
-    profit_adjustment = Column(Float, nullable=False)  # Negative value representing profit reduction
+    profit_adjustment = Column(Float, nullable=False)
     reason = Column(Text, nullable=True)
     return_date = Column(Date, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     sale = relationship("Sale", backref="returns")
     product = relationship("Product")
+    customer = relationship("Customer")
     user = relationship("User")
 
 
@@ -192,14 +215,53 @@ class PurchaseReturn(Base):
     id = Column(Integer, primary_key=True, index=True)
     purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     return_qty = Column(Integer, nullable=False)
+    unit_price_at_purchase = Column(Float, nullable=False)
     refund_amount = Column(Float, nullable=False)
-    refund_method = Column(String(50), default=RefundMethod.CASH)  # cash or supplier_credit
+    refund_method = Column(String(50), default=RefundMethod.CASH)
     reason = Column(Text, nullable=True)
     return_date = Column(Date, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     purchase = relationship("Purchase", backref="returns")
     product = relationship("Product")
+    supplier = relationship("Supplier")
+    user = relationship("User")
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    account_type = Column(String(50), nullable=False)
+    reference_type = Column(String(50), nullable=True)  # customer, supplier, or null
+    reference_id = Column(Integer, nullable=True)  # customer_id, supplier_id, or null
+    balance = Column(Float, default=0.0)
+    is_system = Column(Boolean, default=False)  # True for cash, income, expense accounts
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    ledger_entries = relationship("LedgerEntry", back_populates="account")
+
+
+class LedgerEntry(Base):
+    __tablename__ = "ledger_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    transaction_type = Column(String(50), nullable=False)  # sale, purchase, payment, sales_return, purchase_return, adjustment
+    transaction_id = Column(Integer, nullable=True)  # ID of the related transaction
+    debit_amount = Column(Float, default=0.0)
+    credit_amount = Column(Float, default=0.0)
+    balance_after = Column(Float, nullable=False)  # Running balance after this entry
+    narration = Column(Text, nullable=True)
+    entry_date = Column(Date, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account", back_populates="ledger_entries")
     user = relationship("User")

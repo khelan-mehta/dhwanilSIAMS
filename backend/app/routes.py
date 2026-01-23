@@ -688,3 +688,198 @@ def get_returnable_qty_for_purchase(
         "already_returned": already_returned,
         "returnable_qty": purchase.qty - already_returned
     }
+
+
+# ==================== ACCOUNTS ROUTES ====================
+@router.get("/accounts", response_model=List[schemas.AccountOut])
+def get_accounts(
+    account_type: Optional[str] = Query(None, description="Filter by account type"),
+    is_system: Optional[bool] = Query(None, description="Filter system accounts"),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all accounts with optional filters."""
+    return crud.get_accounts(db, account_type=account_type, is_system=is_system, skip=skip, limit=limit)
+
+
+@router.get("/accounts/summary", response_model=schemas.AccountsSummary)
+def get_accounts_summary(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get summary of all account balances."""
+    return crud.get_accounts_summary(db)
+
+
+@router.get("/accounts/initialize")
+def initialize_accounts(
+    current_user: models.User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Initialize system accounts. Admin only."""
+    crud.initialize_system_accounts(db)
+    return {"message": "System accounts initialized"}
+
+
+@router.get("/accounts/{account_id}", response_model=schemas.AccountOut)
+def get_account(
+    account_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific account by ID."""
+    account = crud.get_account(db, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+@router.get("/accounts/{account_id}/ledger", response_model=List[schemas.LedgerEntryOut])
+def get_account_ledger(
+    account_id: int,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get ledger entries for a specific account."""
+    account = crud.get_account(db, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return crud.get_ledger_entries(db, account_id=account_id, start_date=start_date, end_date=end_date, skip=skip, limit=limit)
+
+
+@router.post("/accounts/transfer")
+def process_transfer(
+    transfer: schemas.AccountTransfer,
+    current_user: models.User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Process a manual transfer between accounts. Admin only."""
+    try:
+        from_acc, to_acc = crud.process_account_transfer(
+            db, transfer.from_account_id, transfer.to_account_id,
+            transfer.amount, transfer.narration, transfer.transfer_date,
+            current_user.id
+        )
+        return {
+            "message": "Transfer completed",
+            "from_account": {"id": from_acc.id, "balance": from_acc.balance},
+            "to_account": {"id": to_acc.id, "balance": to_acc.balance}
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ==================== LEDGER ROUTES ====================
+@router.get("/ledger", response_model=List[schemas.LedgerEntryOut])
+def get_ledger(
+    account_id: Optional[int] = Query(None, description="Filter by account ID"),
+    transaction_type: Optional[str] = Query(None, description="Filter by transaction type"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get global ledger entries with optional filters."""
+    return crud.get_ledger_entries(
+        db, account_id=account_id, transaction_type=transaction_type,
+        start_date=start_date, end_date=end_date, skip=skip, limit=limit
+    )
+
+
+# ==================== STATEMENT ROUTES ====================
+@router.get("/statements/customer/{customer_id}")
+def get_customer_statement(
+    customer_id: int,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get customer account statement."""
+    try:
+        return crud.get_customer_statement(db, customer_id, start_date, end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/statements/supplier/{supplier_id}")
+def get_supplier_statement(
+    supplier_id: int,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get supplier account statement."""
+    try:
+        return crud.get_supplier_statement(db, supplier_id, start_date, end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ==================== EXPORT RETURNS ====================
+@router.get("/export/returns")
+def export_returns(
+    return_type: Optional[str] = Query(None, description="Filter by type: sales, purchases"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Export returns to Excel."""
+    data = []
+
+    if return_type != "purchases":
+        sales_returns = crud.get_sales_returns(db, start_date=start_date, end_date=end_date, limit=10000)
+        for r in sales_returns:
+            data.append({
+                "Type": "Sales Return",
+                "ID": r.id,
+                "Return Date": r.return_date,
+                "Original Transaction ID": r.sale_id,
+                "Product": r.product.name if r.product else "N/A",
+                "Customer/Supplier": r.customer.name if r.customer else "N/A",
+                "Return Qty": r.return_qty,
+                "Unit Price": r.unit_price_at_sale,
+                "Refund Amount": r.refund_amount,
+                "Refund Method": r.refund_method,
+                "Profit Impact": r.profit_adjustment,
+                "Reason": r.reason or ""
+            })
+
+    if return_type != "sales":
+        purchase_returns = crud.get_purchase_returns(db, start_date=start_date, end_date=end_date, limit=10000)
+        for r in purchase_returns:
+            data.append({
+                "Type": "Purchase Return",
+                "ID": r.id,
+                "Return Date": r.return_date,
+                "Original Transaction ID": r.purchase_id,
+                "Product": r.product.name if r.product else "N/A",
+                "Customer/Supplier": r.supplier.name if r.supplier else "N/A",
+                "Return Qty": r.return_qty,
+                "Unit Price": r.unit_price_at_purchase,
+                "Refund Amount": r.refund_amount,
+                "Refund Method": r.refund_method,
+                "Profit Impact": 0,
+                "Reason": r.reason or ""
+            })
+
+    df = pd.DataFrame(data)
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="Returns Report")
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=returns_report.xlsx"}
+    )
