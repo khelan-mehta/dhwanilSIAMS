@@ -566,3 +566,125 @@ def export_inventory(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=inventory.xlsx"}
     )
+
+
+# ==================== RETURNS ROUTES ====================
+@router.post("/sales/{sale_id}/return", response_model=schemas.SalesReturnOut)
+def create_sales_return(
+    sale_id: int,
+    return_data: schemas.SalesReturnCreate,
+    current_user: models.User = Depends(require_manager_or_admin),
+    db: Session = Depends(get_db)
+):
+    """Process a sales return. Only Admin or Manager can create returns."""
+    try:
+        return crud.process_sales_return(db, sale_id, return_data, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/purchases/{purchase_id}/return", response_model=schemas.PurchaseReturnOut)
+def create_purchase_return(
+    purchase_id: int,
+    return_data: schemas.PurchaseReturnCreate,
+    current_user: models.User = Depends(require_manager_or_admin),
+    db: Session = Depends(get_db)
+):
+    """Process a purchase return to supplier. Only Admin or Manager can create returns."""
+    try:
+        return crud.process_purchase_return(db, purchase_id, return_data, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/returns/sales", response_model=List[schemas.SalesReturnOut])
+def get_sales_returns(
+    skip: int = 0,
+    limit: int = 100,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all sales returns. All authenticated users can view."""
+    return crud.get_sales_returns(db, skip=skip, limit=limit, start_date=start_date, end_date=end_date)
+
+
+@router.get("/returns/purchases", response_model=List[schemas.PurchaseReturnOut])
+def get_purchase_returns(
+    skip: int = 0,
+    limit: int = 100,
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all purchase returns. All authenticated users can view."""
+    return crud.get_purchase_returns(db, skip=skip, limit=limit, start_date=start_date, end_date=end_date)
+
+
+@router.get("/returns/summary", response_model=schemas.ReturnSummary)
+def get_return_summary(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get returns summary for reporting."""
+    return crud.get_return_summary(db)
+
+
+@router.get("/sales/{sale_id}/returns", response_model=List[schemas.SalesReturnOut])
+def get_returns_for_sale(
+    sale_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all returns for a specific sale."""
+    return crud.get_returns_for_sale(db, sale_id)
+
+
+@router.get("/purchases/{purchase_id}/returns", response_model=List[schemas.PurchaseReturnOut])
+def get_returns_for_purchase(
+    purchase_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all returns for a specific purchase."""
+    return crud.get_returns_for_purchase(db, purchase_id)
+
+
+@router.get("/sales/{sale_id}/returnable-qty")
+def get_returnable_qty_for_sale(
+    sale_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get the maximum returnable quantity for a sale."""
+    sale = crud.get_sale(db, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    already_returned = crud.get_total_returned_qty_for_sale(db, sale_id)
+    return {
+        "sale_id": sale_id,
+        "original_qty": sale.qty,
+        "already_returned": already_returned,
+        "returnable_qty": sale.qty - already_returned
+    }
+
+
+@router.get("/purchases/{purchase_id}/returnable-qty")
+def get_returnable_qty_for_purchase(
+    purchase_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get the maximum returnable quantity for a purchase."""
+    purchase = crud.get_purchase(db, purchase_id)
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    already_returned = crud.get_total_returned_qty_for_purchase(db, purchase_id)
+    return {
+        "purchase_id": purchase_id,
+        "original_qty": purchase.qty,
+        "already_returned": already_returned,
+        "returnable_qty": purchase.qty - already_returned
+    }

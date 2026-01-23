@@ -133,6 +133,36 @@ export const analyticsAPI = {
   getTopProducts: (limit = 5) => api.get(`/analytics/top-products?limit=${limit}`),
 }
 
+// Returns
+export const returnsAPI = {
+  // Sales Returns
+  createSalesReturn: (saleId, data) => api.post(`/sales/${saleId}/return`, data),
+  getSalesReturns: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/returns/sales${query ? `?${query}` : ''}`)
+  },
+  getReturnsForSale: (saleId) => api.get(`/sales/${saleId}/returns`),
+  getReturnableQtyForSale: (saleId) => api.get(`/sales/${saleId}/returnable-qty`),
+
+  // Purchase Returns
+  createPurchaseReturn: (purchaseId, data) => api.post(`/purchases/${purchaseId}/return`, data),
+  getPurchaseReturns: (params = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.start_date) queryParams.append('start_date', params.start_date)
+    if (params.end_date) queryParams.append('end_date', params.end_date)
+    const query = queryParams.toString()
+    return api.get(`/returns/purchases${query ? `?${query}` : ''}`)
+  },
+  getReturnsForPurchase: (purchaseId) => api.get(`/purchases/${purchaseId}/returns`),
+  getReturnableQtyForPurchase: (purchaseId) => api.get(`/purchases/${purchaseId}/returnable-qty`),
+
+  // Summary
+  getSummary: () => api.get('/returns/summary'),
+}
+
 // Export
 export const exportAPI = {
   debts: () => api.get('/export/debts', { responseType: 'blob' }),

@@ -15,6 +15,7 @@ import {
   Bars3Icon,
   XMarkIcon,
   UserCircleIcon,
+  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline'
 
 const navigation = [
@@ -22,6 +23,7 @@ const navigation = [
   { name: 'Products', href: '/products', icon: CubeIcon },
   { name: 'Purchases', href: '/purchases', icon: ShoppingCartIcon },
   { name: 'Sales', href: '/sales', icon: CurrencyDollarIcon },
+  { name: 'Returns', href: '/returns', icon: ArrowUturnLeftIcon },
   { name: 'Customers', href: '/customers', icon: UsersIcon },
   { name: 'Suppliers', href: '/suppliers', icon: TruckIcon },
   { name: 'Debts', href: '/debts', icon: CreditCardIcon },

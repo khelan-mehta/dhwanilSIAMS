@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { purchasesAPI, productsAPI, suppliersAPI, exportAPI } from '../services/api'
+import { purchasesAPI, productsAPI, suppliersAPI, exportAPI, returnsAPI } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 import {
   PlusIcon,
@@ -8,6 +9,8 @@ import {
   ArrowDownTrayIcon,
   XMarkIcon,
   CalendarIcon,
+  ArrowUturnLeftIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 
 const formatCurrency = (value) => {
@@ -15,6 +18,9 @@ const formatCurrency = (value) => {
 }
 
 export default function Purchases() {
+  const { user } = useAuth()
+  const canProcessReturns = user?.role === 'admin' || user?.role === 'manager'
+
   const [purchases, setPurchases] = useState([])
   const [products, setProducts] = useState([])
   const [suppliers, setSuppliers] = useState([])
@@ -22,6 +28,19 @@ export default function Purchases() {
   const [showModal, setShowModal] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
+
+  // Return modal states
+  const [showReturnModal, setShowReturnModal] = useState(false)
+  const [selectedPurchase, setSelectedPurchase] = useState(null)
+  const [returnableQty, setReturnableQty] = useState(0)
+  const [returnLoading, setReturnLoading] = useState(false)
+  const [showConfirmReturn, setShowConfirmReturn] = useState(false)
+  const [returnForm, setReturnForm] = useState({
+    return_qty: 1,
+    refund_method: 'cash',
+    reason: '',
+    return_date: new Date().toISOString().split('T')[0],
+  })
 
   // Filter states
   const [search, setSearch] = useState('')
@@ -147,6 +166,61 @@ export default function Purchases() {
   const hasActiveFilters = supplierFilter || productFilter || startDate || endDate
 
   const totalAmount = Number(form.qty) * Number(form.purchase_price)
+
+  // Return handling functions
+  const openReturnModal = async (purchase) => {
+    setSelectedPurchase(purchase)
+    setReturnForm({
+      return_qty: 1,
+      refund_method: 'cash',
+      reason: '',
+      return_date: new Date().toISOString().split('T')[0],
+    })
+    try {
+      const res = await returnsAPI.getReturnableQtyForPurchase(purchase.id)
+      setReturnableQty(res.data.returnable_qty)
+      if (res.data.returnable_qty <= 0) {
+        toast.error('No items left to return for this purchase')
+        return
+      }
+      setShowReturnModal(true)
+    } catch (error) {
+      toast.error('Failed to check returnable quantity')
+    }
+  }
+
+  const calculateRefundPreview = () => {
+    if (!selectedPurchase || !returnForm.return_qty) return { refundAmount: 0 }
+    const refundAmount = returnForm.return_qty * selectedPurchase.purchase_price
+    return { refundAmount }
+  }
+
+  const handleReturnSubmit = () => {
+    if (returnForm.return_qty > returnableQty) {
+      toast.error(`Cannot return more than ${returnableQty} items`)
+      return
+    }
+    setShowConfirmReturn(true)
+  }
+
+  const processReturn = async () => {
+    setReturnLoading(true)
+    try {
+      await returnsAPI.createPurchaseReturn(selectedPurchase.id, returnForm)
+      toast.success('Return to supplier processed successfully')
+      setShowReturnModal(false)
+      setShowConfirmReturn(false)
+      setSelectedPurchase(null)
+      loadPurchases()
+      productsAPI.getAll().then(res => setProducts(res.data))
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to process return')
+    } finally {
+      setReturnLoading(false)
+    }
+  }
+
+  const { refundAmount } = calculateRefundPreview()
 
   // Client-side search filtering (for supplier/product name search)
   const filteredPurchases = purchases.filter((p) =>
@@ -319,6 +393,9 @@ export default function Purchases() {
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase">Qty</th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase">Unit Price</th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase">Total</th>
+                {canProcessReturns && (
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -340,6 +417,17 @@ export default function Purchases() {
                   <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
                     {formatCurrency(purchase.total_amount)}
                   </td>
+                  {canProcessReturns && (
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={() => openReturnModal(purchase)}
+                        className="text-sm text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300 flex items-center gap-1"
+                      >
+                        <ArrowUturnLeftIcon className="h-4 w-4" />
+                        Return
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -457,6 +545,158 @@ export default function Purchases() {
                 <button type="submit" className="btn-primary">Record Purchase</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Return Modal */}
+      {showReturnModal && selectedPurchase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="card w-full max-w-lg p-6 animate-slide-in">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6">
+              Return to Supplier - Purchase #{selectedPurchase.id}
+            </h2>
+
+            <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Original Purchase Details</h3>
+              <div className="space-y-1 text-sm">
+                <p><span className="text-gray-500">Product:</span> <span className="font-medium text-gray-900 dark:text-white">{selectedPurchase.product?.name}</span></p>
+                <p><span className="text-gray-500">Supplier:</span> <span className="font-medium text-gray-900 dark:text-white">{selectedPurchase.supplier?.name}</span></p>
+                <p><span className="text-gray-500">Original Qty:</span> <span className="font-medium text-gray-900 dark:text-white">{selectedPurchase.qty}</span></p>
+                <p><span className="text-gray-500">Unit Price:</span> <span className="font-medium text-gray-900 dark:text-white">{formatCurrency(selectedPurchase.purchase_price)}</span></p>
+                <p><span className="text-gray-500">Returnable Qty:</span> <span className="font-medium text-orange-600 dark:text-orange-400">{returnableQty}</span></p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="label">Return Quantity</label>
+                <input
+                  type="number"
+                  value={returnForm.return_qty}
+                  onChange={(e) => setReturnForm({ ...returnForm, return_qty: Math.min(Number(e.target.value), returnableQty) })}
+                  className="input"
+                  min="1"
+                  max={returnableQty}
+                  required
+                />
+                {returnForm.return_qty > returnableQty && (
+                  <p className="mt-1 text-sm text-red-500">Cannot exceed {returnableQty}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="label">Refund Method</label>
+                <select
+                  value={returnForm.refund_method}
+                  onChange={(e) => setReturnForm({ ...returnForm, refund_method: e.target.value })}
+                  className="input"
+                >
+                  <option value="cash">Cash Refund</option>
+                  <option value="credit">Supplier Credit</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="label">Return Date</label>
+                <input
+                  type="date"
+                  value={returnForm.return_date}
+                  onChange={(e) => setReturnForm({ ...returnForm, return_date: e.target.value })}
+                  className="input"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">Reason (optional)</label>
+                <textarea
+                  value={returnForm.reason}
+                  onChange={(e) => setReturnForm({ ...returnForm, reason: e.target.value })}
+                  className="input"
+                  rows="2"
+                  placeholder="Reason for return to supplier..."
+                />
+              </div>
+
+              {/* Preview */}
+              <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200 dark:border-orange-800">
+                <h4 className="text-sm font-medium text-orange-800 dark:text-orange-400 mb-2">Return Preview</h4>
+                <div className="space-y-1 text-sm">
+                  <p className="flex justify-between">
+                    <span className="text-orange-700 dark:text-orange-300">Expected Refund:</span>
+                    <span className="font-semibold text-green-600 dark:text-green-400">{formatCurrency(refundAmount)}</span>
+                  </p>
+                  <p className="flex justify-between">
+                    <span className="text-orange-700 dark:text-orange-300">Stock Decrease:</span>
+                    <span className="font-semibold text-red-600 dark:text-red-400">-{returnForm.return_qty}</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-6">
+              <button
+                type="button"
+                onClick={() => { setShowReturnModal(false); setSelectedPurchase(null); }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReturnSubmit}
+                className="btn-primary bg-orange-600 hover:bg-orange-700"
+                disabled={returnForm.return_qty < 1 || returnForm.return_qty > returnableQty}
+              >
+                Process Return
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      {showConfirmReturn && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="card w-full max-w-md p-6 animate-slide-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-orange-100 dark:bg-orange-900/20 rounded-full">
+                <ExclamationTriangleIcon className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Confirm Return to Supplier</h3>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              Are you sure you want to return items to the supplier? This will:
+            </p>
+            <ul className="text-sm text-gray-600 dark:text-gray-400 mb-6 space-y-2">
+              <li className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 bg-red-500 rounded-full"></span>
+                Decrease stock by {returnForm.return_qty} units
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 bg-green-500 rounded-full"></span>
+                Expect refund of {formatCurrency(refundAmount)} ({returnForm.refund_method})
+              </li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowConfirmReturn(false)}
+                className="btn-secondary"
+                disabled={returnLoading}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={processReturn}
+                className="btn-primary bg-orange-600 hover:bg-orange-700"
+                disabled={returnLoading}
+              >
+                {returnLoading ? 'Processing...' : 'Confirm Return'}
+              </button>
+            </div>
           </div>
         </div>
       )}

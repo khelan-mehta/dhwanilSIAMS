@@ -548,3 +548,200 @@ def get_staff_dashboard(db: Session) -> dict:
         "low_stock_products": low_stock,
         "recent_activity": recent_sales
     }
+
+
+# ==================== RETURNS OPERATIONS ====================
+def get_total_returned_qty_for_sale(db: Session, sale_id: int) -> int:
+    """Get total quantity already returned for a sale"""
+    returns = db.query(models.SalesReturn).filter(models.SalesReturn.sale_id == sale_id).all()
+    return sum(r.return_qty for r in returns)
+
+
+def get_total_returned_qty_for_purchase(db: Session, purchase_id: int) -> int:
+    """Get total quantity already returned for a purchase"""
+    returns = db.query(models.PurchaseReturn).filter(models.PurchaseReturn.purchase_id == purchase_id).all()
+    return sum(r.return_qty for r in returns)
+
+
+def process_sales_return(
+    db: Session,
+    sale_id: int,
+    return_data: schemas.SalesReturnCreate,
+    user_id: int = None
+) -> models.SalesReturn:
+    """
+    Process a sales return with stock rollback and financial adjustments.
+    - Increases product stock
+    - Calculates refund based on selling price
+    - Adjusts profit (reduces by cost_price * return_qty)
+    - For cash refund: reduces paid_amount
+    - For credit: reduces outstanding (total_amount)
+    """
+    sale = get_sale(db, sale_id)
+    if not sale:
+        raise ValueError("Sale not found")
+
+    # Validate return quantity
+    already_returned = get_total_returned_qty_for_sale(db, sale_id)
+    max_returnable = sale.qty - already_returned
+    if return_data.return_qty > max_returnable:
+        raise ValueError(f"Cannot return more than {max_returnable} items")
+
+    # Get product for cost price calculation
+    product = get_product(db, sale.product_id)
+    if not product:
+        raise ValueError("Product not found")
+
+    # Calculate refund amount and profit adjustment
+    refund_amount = return_data.return_qty * sale.selling_price
+    profit_adjustment = -(return_data.return_qty * (sale.selling_price - product.cost_price))
+
+    # Increase product stock
+    product.stock_qty += return_data.return_qty
+
+    # Adjust sale financials based on refund method
+    if return_data.refund_method == "cash":
+        # Cash refund: reduce paid amount
+        sale.paid_amount = max(0, sale.paid_amount - refund_amount)
+    else:
+        # Credit: reduce total amount (customer credit)
+        sale.total_amount -= refund_amount
+
+    # Update fully paid status
+    sale.is_fully_paid = sale.paid_amount >= sale.total_amount
+
+    # Reduce profit
+    sale.profit += profit_adjustment
+
+    # Create return record
+    db_return = models.SalesReturn(
+        sale_id=sale_id,
+        product_id=sale.product_id,
+        user_id=user_id,
+        return_qty=return_data.return_qty,
+        refund_amount=refund_amount,
+        refund_method=return_data.refund_method,
+        profit_adjustment=profit_adjustment,
+        reason=return_data.reason,
+        return_date=return_data.return_date
+    )
+    db.add(db_return)
+    db.commit()
+    db.refresh(db_return)
+    return db_return
+
+
+def process_purchase_return(
+    db: Session,
+    purchase_id: int,
+    return_data: schemas.PurchaseReturnCreate,
+    user_id: int = None
+) -> models.PurchaseReturn:
+    """
+    Process a purchase return to supplier with stock reduction.
+    - Decreases product stock
+    - Calculates refund based on purchase price
+    - Tracks refund amount for expense adjustment
+    """
+    purchase = get_purchase(db, purchase_id)
+    if not purchase:
+        raise ValueError("Purchase not found")
+
+    # Validate return quantity
+    already_returned = get_total_returned_qty_for_purchase(db, purchase_id)
+    max_returnable = purchase.qty - already_returned
+    if return_data.return_qty > max_returnable:
+        raise ValueError(f"Cannot return more than {max_returnable} items")
+
+    # Get product
+    product = get_product(db, purchase.product_id)
+    if not product:
+        raise ValueError("Product not found")
+
+    # Validate stock availability
+    if product.stock_qty < return_data.return_qty:
+        raise ValueError(f"Insufficient stock. Only {product.stock_qty} available")
+
+    # Calculate refund amount
+    refund_amount = return_data.return_qty * purchase.purchase_price
+
+    # Decrease product stock
+    product.stock_qty -= return_data.return_qty
+
+    # Adjust purchase total
+    purchase.total_amount -= refund_amount
+
+    # Create return record
+    db_return = models.PurchaseReturn(
+        purchase_id=purchase_id,
+        product_id=purchase.product_id,
+        user_id=user_id,
+        return_qty=return_data.return_qty,
+        refund_amount=refund_amount,
+        refund_method=return_data.refund_method,
+        reason=return_data.reason,
+        return_date=return_data.return_date
+    )
+    db.add(db_return)
+    db.commit()
+    db.refresh(db_return)
+    return db_return
+
+
+def get_sales_returns(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> List[models.SalesReturn]:
+    query = db.query(models.SalesReturn)
+    if start_date:
+        query = query.filter(models.SalesReturn.return_date >= start_date)
+    if end_date:
+        query = query.filter(models.SalesReturn.return_date <= end_date)
+    return query.order_by(desc(models.SalesReturn.return_date)).offset(skip).limit(limit).all()
+
+
+def get_purchase_returns(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> List[models.PurchaseReturn]:
+    query = db.query(models.PurchaseReturn)
+    if start_date:
+        query = query.filter(models.PurchaseReturn.return_date >= start_date)
+    if end_date:
+        query = query.filter(models.PurchaseReturn.return_date <= end_date)
+    return query.order_by(desc(models.PurchaseReturn.return_date)).offset(skip).limit(limit).all()
+
+
+def get_sales_return(db: Session, return_id: int) -> Optional[models.SalesReturn]:
+    return db.query(models.SalesReturn).filter(models.SalesReturn.id == return_id).first()
+
+
+def get_purchase_return(db: Session, return_id: int) -> Optional[models.PurchaseReturn]:
+    return db.query(models.PurchaseReturn).filter(models.PurchaseReturn.id == return_id).first()
+
+
+def get_returns_for_sale(db: Session, sale_id: int) -> List[models.SalesReturn]:
+    return db.query(models.SalesReturn).filter(models.SalesReturn.sale_id == sale_id).all()
+
+
+def get_returns_for_purchase(db: Session, purchase_id: int) -> List[models.PurchaseReturn]:
+    return db.query(models.PurchaseReturn).filter(models.PurchaseReturn.purchase_id == purchase_id).all()
+
+
+def get_return_summary(db: Session) -> dict:
+    """Get summary of all returns for reporting"""
+    sales_returns = db.query(models.SalesReturn).all()
+    purchase_returns = db.query(models.PurchaseReturn).all()
+
+    return {
+        "total_sales_returns": len(sales_returns),
+        "total_purchase_returns": len(purchase_returns),
+        "total_sales_refund_amount": sum(r.refund_amount for r in sales_returns),
+        "total_purchase_refund_amount": sum(r.refund_amount for r in purchase_returns)
+    }

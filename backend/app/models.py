@@ -159,3 +159,47 @@ class ActivityLog(Base):
     entity_id = Column(Integer, nullable=True)
     details = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RefundMethod(str, enum.Enum):
+    CASH = "cash"
+    CREDIT = "credit"
+
+
+class SalesReturn(Base):
+    __tablename__ = "sales_returns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    return_qty = Column(Integer, nullable=False)
+    refund_amount = Column(Float, nullable=False)
+    refund_method = Column(String(50), default=RefundMethod.CASH)
+    profit_adjustment = Column(Float, nullable=False)  # Negative value representing profit reduction
+    reason = Column(Text, nullable=True)
+    return_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    sale = relationship("Sale", backref="returns")
+    product = relationship("Product")
+    user = relationship("User")
+
+
+class PurchaseReturn(Base):
+    __tablename__ = "purchase_returns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    return_qty = Column(Integer, nullable=False)
+    refund_amount = Column(Float, nullable=False)
+    refund_method = Column(String(50), default=RefundMethod.CASH)  # cash or supplier_credit
+    reason = Column(Text, nullable=True)
+    return_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    purchase = relationship("Purchase", backref="returns")
+    product = relationship("Product")
+    user = relationship("User")

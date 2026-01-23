@@ -10,6 +10,7 @@ import Sales from './pages/Sales'
 import Customers from './pages/Customers'
 import Suppliers from './pages/Suppliers'
 import Debts from './pages/Debts'
+import Returns from './pages/Returns'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Reports from './pages/Reports'
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="customers" element={<Customers />} />
         <Route path="suppliers" element={<Suppliers />} />
         <Route path="debts" element={<Debts />} />
+        <Route path="returns" element={<Returns />} />
         <Route path="users" element={<Users />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />

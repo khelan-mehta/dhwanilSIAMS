@@ -301,3 +301,62 @@ class DashboardStats(BaseModel):
     customer_debts: List[CustomerDebt]
     sales_trend: List[SalesAnalytics]
     low_stock_products: List[ProductOut]
+
+
+# ==================== RETURN SCHEMAS ====================
+class SalesReturnCreate(BaseModel):
+    return_qty: int = Field(..., gt=0)
+    refund_method: str = "cash"  # cash or credit
+    reason: Optional[str] = None
+    return_date: date
+
+
+class SalesReturnOut(BaseModel):
+    id: int
+    sale_id: int
+    product_id: int
+    user_id: Optional[int]
+    return_qty: int
+    refund_amount: float
+    refund_method: str
+    profit_adjustment: float
+    reason: Optional[str]
+    return_date: date
+    created_at: datetime
+    sale: Optional[SaleOut] = None
+    product: Optional[ProductOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PurchaseReturnCreate(BaseModel):
+    return_qty: int = Field(..., gt=0)
+    refund_method: str = "cash"  # cash or supplier_credit
+    reason: Optional[str] = None
+    return_date: date
+
+
+class PurchaseReturnOut(BaseModel):
+    id: int
+    purchase_id: int
+    product_id: int
+    user_id: Optional[int]
+    return_qty: int
+    refund_amount: float
+    refund_method: str
+    reason: Optional[str]
+    return_date: date
+    created_at: datetime
+    purchase: Optional[PurchaseOut] = None
+    product: Optional[ProductOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReturnSummary(BaseModel):
+    total_sales_returns: int
+    total_purchase_returns: int
+    total_sales_refund_amount: float
+    total_purchase_refund_amount: float
